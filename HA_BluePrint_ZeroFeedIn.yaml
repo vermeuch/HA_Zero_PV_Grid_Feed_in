@@ -1,36 +1,17 @@
 blueprint:
   name: Control PV Limit to avoid exporting to the grid
   description: >
-    # Zero Feed‑In Automation
-    **Version: 0.0.9**
+    Zero Feed In Automation - v0.0.9
 
-    # Summary
-    This automation keeps the photovoltaic (PV) inverter from exporting power to the grid.
-    It now **immediately pushes the inverter to 100 %** whenever there is a net import
-    from the grid, and re‑enables the regular zero‑feed‑in algorithm when the flow
-    turns back to export.
+    Zet de omvormer op 100% bij energie-import (netafname).
+    Reguleert PV-output op basis van netlevering bij export.
 
-    ## New in 0.0.9
-    * **Instant full‑power on import** – the inverter limit is set to *100 %* of its
-      configured maximum as soon as `GridPowerMeters` indicate *import* (net power > 0 W).
-    * Added a periodic time trigger so the rule keeps running even if the grid sensors
-      do not fire state‑change events.
-
-    ## Required sensors / entities
-
-    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W.
-    * **BatteryPowerMeters** – *Optional*: Sensors measuring battery charge/discharge in W.
-    * **PVPowerMeters** – Sensors measuring PV generation in W.
-    * **NonPersistantLimit** – *Number* entity that stores the **percentage** inverter
-      power limit (0–100 %).
-    * **InverterOnlineStatus** – Binary/Text entity that is *"On"* or numeric *4* when the inverter is reachable.
-
-    Full change log & docs: https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
+    https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
   domain: automation
   input:
     TriggerInterval:
       name: Interval trigger
-      description: Interval (seconds) between periodic evaluations.
+      description: Evaluatie-interval in seconden
       default: 15
       selector:
         number:
@@ -39,41 +20,34 @@ blueprint:
           unit_of_measurement: "s"
           step: 5
     MaxInverterPower:
-      name: Inverter upper limit (W)
-      description: Maximum AC power the inverter can deliver.
+      name: Maximaal vermogen (W)
       default: 1600
       selector:
         number:
           min: 0
           max: 5000
           unit_of_measurement: "W"
-          mode: box
           step: 1
     MinInverterPower:
-      name: Inverter lower limit (W)
-      description: Minimum AC power the inverter should deliver.
+      name: Minimum vermogen (W)
       default: 600
       selector:
         number:
           min: 0
           max: 5000
           unit_of_measurement: "W"
-          mode: box
           step: 1
     AllowedFeedIn:
-      name: Allowed grid feed‑in (W)
-      description: PV power reduction starts only if **export** exceeds this value.
+      name: Toegestane teruglevering (W)
       default: 0
       selector:
         number:
           min: 0
           max: 5000
           unit_of_measurement: "W"
-          mode: box
           step: 1
     ModeSelector:
-      name: Control mode selector
-      description: "1 → smooth control · 2 → hard cut to zero feed‑in."
+      name: Regelingstype
       default: 1
       selector:
         number:
@@ -81,149 +55,139 @@ blueprint:
           max: 2
           step: 1
     InvertGrid:
-      name: Invert GridPowerMeters?
-      description: Enable if your GridPowerMeters report export as positive.
+      name: Inverteer netmetingen?
       default: false
       selector:
         boolean:
     GridPowerMeters:
-      name: Grid power sensors (W)
-      description: e.g. all three phase sensors L1, L2, L3.
+      name: Netverbruik sensoren
       selector:
         entity:
           device_class: power
           multiple: true
     BatteryPowerMeters:
-      name: Battery power sensors (optional)
-      description: Sensors reporting battery charge/discharge power (positive for discharge).
+      name: Batterij sensoren
       default: []
       selector:
         entity:
           device_class: power
           multiple: true
     PVPowerMeters:
-      name: PV generation sensors (W)
-      description: Sensors measuring current PV power.
+      name: PV productie sensoren
       selector:
         entity:
           device_class: power
           multiple: true
     NonPersistantLimit:
-      name: Non‑persistent PV limit entity (%)
-      description: Number entity to write the calculated PV limit percentage (0‑100).
+      name: Doelwaarde PV-begrenzing (%)
       selector:
         entity:
     InverterOnlineStatus:
-      name: Inverter online status
-      description: Entity that indicates the inverter is reachable ("On" or 4).
+      name: Inverter status
       selector:
         entity:
 
 variables:
-  triggerinterval: !input "TriggerInterval"
-  lowerlimit: !input "MinInverterPower"
-  upperlimit: !input "MaxInverterPower"
-  currentlimit: !input "NonPersistantLimit"
-  PVPowerMetersvar: !input "PVPowerMeters"
-  GridPowerMetersvar: !input "GridPowerMeters"
-  BatteryPowerMetersvar: !input "BatteryPowerMeters"
-  ctlr_mode: !input "ModeSelector"
-  invert_grid: !input "InvertGrid"
+  triggerinterval: !input TriggerInterval
+  lowerlimit: !input MinInverterPower
+  upperlimit: !input MaxInverterPower
+  currentlimit: !input NonPersistantLimit
+  PVPowerMetersvar: !input PVPowerMeters
+  GridPowerMetersvar: !input GridPowerMeters
+  BatteryPowerMetersvar: !input BatteryPowerMeters
+  ctlr_mode: !input ModeSelector
+  invert_grid: !input InvertGrid
+  inverteronline: !input InverterOnlineStatus
 
-  # --- Combined sensor values ---
   pvgeneration: >
-    {{ expand(PVPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum }}
+    {% set pv = expand(PVPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {{ pv }}
+
   grid_raw: >
-    {% set g = expand(GridPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {% set grid = expand(GridPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
     {% if invert_grid %}
-      {% set g = g * -1 %}
+      {{ grid * -1 }}
+    {% else %}
+      {{ grid }}
     {% endif %}
-    {{ g }}
+
   battery_raw: >
-    {{ expand(BatteryPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum }}
-  gridsum: >
-    {{ grid_raw + battery_raw }}
+    {% set bat = expand(BatteryPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {{ bat }}
 
-  # --- State flags ---
-  is_importing: >
-    {{ gridsum | float(0) > 0 }}
+  gridsum: "{{ grid_raw + battery_raw }}"
 
-  # --- Feed‑in modifier (only for export) ---
-  modifier: !input "AllowedFeedIn"
+  modifier: !input AllowedFeedIn
+
   modifier_setpoint: >
-    {% if gridsum | float(0) < 0 %}
+    {% if gridsum | float < 0 %}
       {{ modifier }}
     {% else %}
       0
     {% endif %}
 
-  inverteronline: !input "InverterOnlineStatus"
+  is_importing: "{{ gridsum | float > 0 }}"
 
-  # --- Regular set‑point calculations (used only for export) ---
   new_setpoint_mode1: >
-    {% set sp = gridsum | float(0) + modifier_setpoint | float(0) + states(currentlimit) | float(0) - 5 %}
-    {% if sp > upperlimit %}
-      {% set sp = upperlimit %}
-    {% elif sp < lowerlimit %}
-      {% set sp = lowerlimit %}
+    {% set setpoint = gridsum | float + modifier_setpoint | float + states(currentlimit) | float - 5 %}
+    {% if setpoint > upperlimit %}
+      {{ upperlimit }}
+    {% elif setpoint < lowerlimit %}
+      {{ lowerlimit }}
+    {% else %}
+      {{ setpoint }}
     {% endif %}
-    {{ sp }}
+
   new_setpoint_mode2: >
-    {% set sp = gridsum | float(0) + modifier_setpoint | float(0) + pvgeneration | float(0) + 5 %}
-    {% if sp > upperlimit %}
-      {% set sp = upperlimit %}
-    {% elif sp < lowerlimit %}
-      {% set sp = lowerlimit %}
+    {% set setpoint = gridsum | float + modifier_setpoint | float + pvgeneration | float + 5 %}
+    {% if setpoint > upperlimit %}
+      {{ upperlimit }}
+    {% elif setpoint < lowerlimit %}
+      {{ lowerlimit }}
+    {% else %}
+      {{ setpoint }}
     {% endif %}
-    {{ sp }}
+
   new_setpoint: >
-    {% if ctlr_mode == 1 %}
+    {% if is_importing %}
+      {{ upperlimit }}
+    {% elif ctlr_mode == 1 %}
       {{ new_setpoint_mode1 | round(0) }}
     {% else %}
       {{ new_setpoint_mode2 | round(0) }}
     {% endif %}
 
-  # --- Percentage output to inverter ---
   percent_setpoint: >
-    {% if is_importing %}
-      100
-    {% elif upperlimit | float(0) > 0 %}
-      {{ (new_setpoint | float(0) / upperlimit | float(0)) * 100 | round(0) }}
+    {% if upperlimit | float > 0 %}
+      {{ (new_setpoint | float / upperlimit | float * 100) | round(0) }}
     {% else %}
       0
     {% endif %}
 
 trigger:
   - platform: state
-    entity_id: !input "GridPowerMeters"
+    entity_id: !input GridPowerMeters
   - platform: time_pattern
-    seconds: "/{{ triggerinterval }}"
+    seconds: "/15"
 
 condition:
   - condition: template
-    value_template: "{{ states(inverteronline) == '4' }}"
+    value_template: "{{ states(inverteronline) in ['4', 'on', 'On', 'true'] }}"
   - condition: template
-    value_template: |
-      {% set last = state_attr(this.entity_id, 'last_triggered') %}
-      {{ last is none or (now() - last) > timedelta(seconds=triggerinterval) }}
-  - condition: template
-    value_template: "{{ (percent_setpoint - states(currentlimit) | float(0)) | abs > 1 }}"
+    value_template: "{{ (percent_setpoint - states(currentlimit) | float) | abs > 1 }}"
 
 action:
   - service: logbook.log
-    data_template:
-      name: "PVSetpoint%:"
+    data:
+      name: "PVSetpoint %"
       message: >
-        {% if is_importing %}
-          Import → 100 % (Grid {{ grid_raw }} W · Battery {{ battery_raw }} W = Net {{ gridsum }} W)
-        {% else %}
-          Export → {{ percent_setpoint }} % (Net {{ gridsum }} W, PV {{ pvgeneration }} W)
-        {% endif %}
+        Gridsum: {{ gridsum }} W (Grid: {{ grid_raw }} + Battery: {{ battery_raw }}) |
+        PV: {{ pvgeneration }} W → Setpoint: {{ new_setpoint }} W ({{ percent_setpoint }}%)
+
   - service: number.set_value
     target:
-      entity_id: !input "NonPersistantLimit"
+      entity_id: !input NonPersistantLimit
     data:
       value: "{{ percent_setpoint }}"
 
 mode: single
-
