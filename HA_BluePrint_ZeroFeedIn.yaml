@@ -2,149 +2,188 @@ blueprint:
   name: Control PV Limit to avoid exporting to the grid
   description: >
     # Zero Feed In Automation
-    **Version: 0.0.4**
+    **Version: 0.0.5**
 
     # Summary
-    This automation will react on changes of energy imported or exported from the grid.
-    It will control the Photovoltaic power generation by setting the limit to a value avoiding exporting to the grid
+    This automation reacts to changes in energy imported from or exported to the grid.
+    It dynamically sets the photovoltaic (PV) inverter power limit so that no
+    (or only a user‑defined minimum) power is fed back to the grid.
+
+    ## New in 0.0.5
+    * **Invert GridPowerMeters** – Many power meters report **export** as a positive
+      number and **import** as negative. You can now specify whether your
+      GridPowerMeters need to be inverted. If set to **True**, every GridPowerMeter
+      reading will have its sign flipped before calculations.
 
     ## Required sensors / entities
 
-    <u>GridPowerMeters:</u>
-    Sensors measuring Grid import or export e.g. all 3 phases in W.
-    All power meters will be summed up to define the total grid import or export.
-
-    <u>PVPowerMeters:</u>
-    Sensors measuring PV Generation in W
-    If sevaral Sensors are selected, those will be summed up.
-
-    <u>NonPersistantLimit</u>:
-    Entity to set the non persistant absolut limit in W. It should be the non persistant limit to avoid too many writes towards the flash memory.
-
-    <u>InverterOnlineStatus</u>
-    Entity indicating if the inverter is available ('On' -> available)
-
+    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W. They will be summed.
+    * **PVPowerMeters** – Sensors measuring PV generation in W. They will be summed.
+    * **NonPersistantLimit** – Number entity that stores the *non‑persistent* power limit in W.
+    * **InverterOnlineStatus** – Binary/Text entity that is *"On"* or numeric *4* when the inverter is reachable.
 
     Kudos for the simple algorithm and idea go to:
     https://selbstbau-pv.de/wissensbasis/nulleinspeisung-hoymiles-hm-1500-mit-opendtu-python-steuerung/
 
     # Change log
-    Check the github repository: https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
+    Full details: https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
   domain: automation
   input:
     TriggerInterval:
       name: Interval trigger
-      description: Interval of which the automation will be triggered and a limit could be set in seconds
+      description: Interval (seconds) between evaluations.
       default: 15
       selector:
         number:
           min: 5
           max: 120
-          unit_of_measurement: 's'
-          step: 5.0
+          unit_of_measurement: "s"
+          step: 5
     MaxInverterPower:
       name: Inverter upper limit
-      description: Define the maximum power the inverter can deliver in W
+      description: Maximum inverter power (W).
       default: 1600
       selector:
         number:
-          min: 0.0
-          max: 5000.0
-          unit_of_measurement: 'W'
+          min: 0
+          max: 5000
+          unit_of_measurement: "W"
           mode: box
-          step: 1.0
+          step: 1
     MinInverterPower:
       name: Inverter lower limit
-      description: Define the minimum power the inverter should deliver in W
+      description: Minimum inverter power (W).
       default: 600
       selector:
         number:
-          min: 0.0
-          max: 5000.0
-          unit_of_measurement: 'W'
+          min: 0
+          max: 5000
+          unit_of_measurement: "W"
           mode: box
-          step: 1.0
+          step: 1
     AllowedFeedIn:
-      name: Number in W of grid feed that is accepted
-      description: Limitation of PV Generation will only be active if Number in W of grid feed that is higher than this number
+      name: Allowed grid feed‑in (W)
+      description: PV power reduction starts only if export exceeds this value.
       default: 0
       selector:
         number:
-          min: 0.0
-          max: 5000.0
-          unit_of_measurement: 'W'
+          min: 0
+          max: 5000
+          unit_of_measurement: "W"
           mode: box
-          step: 1.0
+          step: 1
     ModeSelector:
-      name: Select Controll ModeSelector
-      description: 'Mode 1: smooth decrease of allowed generation. Mode 2: Hard Cut to zero feed in'
+      name: Control mode selector
+      description: "1 → smooth control, 2 → hard cut to zero feed‑in"
       default: 1
       selector:
         number:
           min: 1
           max: 2
           step: 1
+    InvertGrid:
+      name: Invert GridPowerMeters?
+      description: "Enable if your GridPowerMeters report export as positive."
+      default: false
+      selector:
+        boolean:
     GridPowerMeters:
-      name: Sensors measuring Grid import or export e.g. all 3 phases in W
-      description: All power meters will be summed up to define the total grid import or export. Choose e.g. all 3 sensors measuring L1, L2 & L3 in W
+      name: Grid power sensors (W)
+      description: e.g. all three phase sensors L1, L2, L3.
       selector:
         entity:
           device_class: power
           multiple: true
     PVPowerMeters:
-      name: Sensors measuring PV Generation in W
-      description: Choose the sensor showing the current produced PV Power
+      name: PV generation sensors (W)
+      description: Sensors measuring current PV power.
       selector:
         entity:
           device_class: power
           multiple: true
     NonPersistantLimit:
-      name: Entity to set the non persistant absolut limit in W
-      description: Choose the entity to define the limit of PV generation in W
+      name: Non‑persistent PV limit entity (W)
+      description: Number entity to write the calculated PV limit.
       selector:
         entity:
     InverterOnlineStatus:
-      name: Entity that shows if the inverter is online
-      description: Choose the entity showing the inverters is reachable
+      name: Inverter online status
+      description: Entity that indicates the inverter is reachable ("On" or 4).
       selector:
         entity:
 
 variables:
-  triggerinterval: !input 'TriggerInterval'
-  lowerlimit: !input 'MinInverterPower'
-  upperlimit: !input 'MaxInverterPower'
-  currentlimit: !input 'NonPersistantLimit'
-  PVPowerMetersvar: !input 'PVPowerMeters'
-  GridPowerMetersvar: !input 'GridPowerMeters'
-  ctlr_mode: !input 'ModeSelector'
-  pvgeneration: "{% set pvgeneration = expand(PVPowerMetersvar) | map(attribute='state') |map('float',default=0) | sum %} {{pvgeneration}}"
-  gridsum: "{% set gridconsumption = expand(GridPowerMetersvar) | map(attribute='state') |map('float',default=0) | sum %} {{gridconsumption}}"
-  modifier: !input 'AllowedFeedIn'
-  modifier_setpoint: "{% if gridsum < 0 -%}{{modifier}} {% else -%} {{0}} {%- endif %}"
-  inverteronline: !input 'InverterOnlineStatus'
-  new_setpoint_mode1: "{% set setpoint = gridsum + modifier_setpoint|float(0) + states(currentlimit)|float(0) -5 %}{% if setpoint > upperlimit -%}{% set setpoint = upperlimit %}{% elif setpoint < lowerlimit %}{% set setpoint = lowerlimit %}{%- endif %}{{setpoint}}"
-  new_setpoint_mode2: '{% set setpoint = gridsum + modifier_setpoint|float(0) + pvgeneration + 5 %}{% if setpoint > upperlimit -%}{% set setpoint = upperlimit %}{% elif setpoint < lowerlimit %}{% set setpoint = lowerlimit %}{%- endif %}{{setpoint}}'
-  new_setpoint: '{% if ctlr_mode == 1 -%} {{new_setpoint_mode1 | round(0)}} {% elif ctlr_mode == 2 -%} {{new_setpoint_mode2 | round(0)}} {%- endif %}'
+  triggerinterval: !input "TriggerInterval"
+  lowerlimit: !input "MinInverterPower"
+  upperlimit: !input "MaxInverterPower"
+  currentlimit: !input "NonPersistantLimit"
+  PVPowerMetersvar: !input "PVPowerMeters"
+  GridPowerMetersvar: !input "GridPowerMeters"
+  ctlr_mode: !input "ModeSelector"
+  invert_grid: !input "InvertGrid"
+  pvgeneration: >
+    {% set pv = expand(PVPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {{ pv }}
+  gridsum: >
+    {% set grid = expand(GridPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {% if invert_grid %}
+      {% set grid = grid * -1 %}
+    {% endif %}
+    {{ grid }}
+  modifier: !input "AllowedFeedIn"
+  modifier_setpoint: >
+    {% if gridsum | float(0) < 0 %}
+      {{ modifier }}
+    {% else %}
+      0
+    {% endif %}
+  inverteronline: !input "InverterOnlineStatus"
+  new_setpoint_mode1: >
+    {% set setpoint = gridsum | float(0) + modifier_setpoint | float(0) + states(currentlimit) | float(0) - 5 %}
+    {% if setpoint > upperlimit %}
+      {% set setpoint = upperlimit %}
+    {% elif setpoint < lowerlimit %}
+      {% set setpoint = lowerlimit %}
+    {% endif %}
+    {{ setpoint }}
+  new_setpoint_mode2: >
+    {% set setpoint = gridsum | float(0) + modifier_setpoint | float(0) + pvgeneration | float(0) + 5 %}
+    {% if setpoint > upperlimit %}
+      {% set setpoint = upperlimit %}
+    {% elif setpoint < lowerlimit %}
+      {% set setpoint = lowerlimit %}
+    {% endif %}
+    {{ setpoint }}
+  new_setpoint: >
+    {% if ctlr_mode == 1 %}
+      {{ new_setpoint_mode1 | round(0) }}
+    {% elif ctlr_mode == 2 %}
+      {{ new_setpoint_mode2 | round(0) }}
+    {% endif %}
+
 trigger:
-- platform: state
-  entity_id: !input 'GridPowerMeters'
+  - platform: state
+    entity_id: !input "GridPowerMeters"
+
 condition:
-- condition: template
-  value_template: '{{ states(inverteronline) == "on"}}'
-- condition: template
-  value_template: |
-    {%- set last = state_attr(this.entity_id, 'last_triggered') %}
-    {{ last is none or (last is not none and (now() - last) > timedelta(seconds=triggerinterval)) }}
-- condition: template
-  value_template: '{{(new_setpoint - states(currentlimit)|float(0))|abs > 5}}'
+  - condition: template
+    value_template: "{{ states(inverteronline) == '4' }}"
+  - condition: template
+    value_template: |
+      {% set last = state_attr(this.entity_id, 'last_triggered') %}
+      {{ last is none or (last is not none and (now() - last) > timedelta(seconds=triggerinterval)) }}
+  - condition: template
+    value_template: "{{ (new_setpoint - states(currentlimit) | float(0)) | abs > 5 }}"
+
 action:
   - service: logbook.log
     data_template:
       name: "PVSetpoint:"
-      message: "Gridsum: {{gridsum}} W & PVGeneration: {{pvgeneration}} W -> new_setpoint: {{new_setpoint}} W"
+      message: "Gridsum: {{ gridsum }} W & PVGeneration: {{ pvgeneration }} W -> new_setpoint: {{ new_setpoint }} W"
   - service: number.set_value
     target:
-      entity_id: !input 'NonPersistantLimit'
+      entity_id: !input "NonPersistantLimit"
     data:
-      value: "{{new_setpoint}}"
+      value: "{{ new_setpoint }}"
+
 mode: single
