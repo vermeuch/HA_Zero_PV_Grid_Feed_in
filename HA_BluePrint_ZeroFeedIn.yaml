@@ -148,7 +148,7 @@ variables:
     {% if gridsum | float(0) < 0 %}
       {{ modifier }}
     {% else %}
-      0
+      100
     {% endif %}
   inverteronline: !input "InverterOnlineStatus"
   new_setpoint_mode1: >
