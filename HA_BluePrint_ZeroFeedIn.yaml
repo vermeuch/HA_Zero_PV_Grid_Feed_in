@@ -172,9 +172,11 @@ variables:
       {{ new_setpoint_mode1 | round(0) }}
     {% elif ctlr_mode == 2 %}
       {{ new_setpoint_mode2 | round(0) }}
-    {% endif %}
+    {% endif %} 
   percent_setpoint: >
-    {% if upperlimit | float(0) > 0 %}
+    {% if pvgeneration | float(0) < 0 or gridsum | float(0) > 0 %}
+      100
+    {% elif upperlimit | float(0) > 0 %}
       {{ (new_setpoint | float(0) / upperlimit | float(0)) * 100 | round(0) }}
     {% else %}
       0
