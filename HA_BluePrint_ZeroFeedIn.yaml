@@ -1,36 +1,36 @@
 blueprint:
   name: Control PV Limit to avoid exporting to the grid
   description: >
-    # Zero Feed In Automation
-    **Version: 0.0.7**
+    # Zero Feed‑In Automation
+    **Version: 0.0.9**
 
     # Summary
-    This automation reacts to changes in energy imported from or exported to the grid.
-    It dynamically sets the photovoltaic (PV) inverter power limit so that no
-    (or only a user‑defined minimum) power is fed back to the grid.
+    This automation keeps the photovoltaic (PV) inverter from exporting power to the grid.
+    It now **immediately pushes the inverter to 100 %** whenever there is a net import
+    from the grid, and re‑enables the regular zero‑feed‑in algorithm when the flow
+    turns back to export.
 
-    ## New in 0.0.7
-    * **Percentage output** – The value written to *NonPersistantLimit* is now a **percentage** of the inverter’s maximum AC power instead of watts.
-      It is calculated as `(new_setpoint / upperlimit) * 100` and rounded to the nearest whole percent.
+    ## New in 0.0.9
+    * **Instant full‑power on import** – the inverter limit is set to *100 %* of its
+      configured maximum as soon as `GridPowerMeters` indicate *import* (net power > 0 W).
+    * Added a periodic time trigger so the rule keeps running even if the grid sensors
+      do not fire state‑change events.
 
     ## Required sensors / entities
 
-    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W.
-    * **BatteryPowerMeters** – *Optional*: Sensors measuring battery charge/discharge in W.
-    * **PVPowerMeters** – Sensors measuring PV generation in W.
-    * **NonPersistantLimit** – *Number* entity that stores the **percentage** power limit (0‑100 %).
+    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W.
+    * **BatteryPowerMeters** – *Optional*: Sensors measuring battery charge/discharge in W.
+    * **PVPowerMeters** – Sensors measuring PV generation in W.
+    * **NonPersistantLimit** – *Number* entity that stores the **percentage** inverter
+      power limit (0–100 %).
     * **InverterOnlineStatus** – Binary/Text entity that is *"On"* or numeric *4* when the inverter is reachable.
 
-    Kudos for the simple algorithm and idea go to:
-    https://selbstbau-pv.de/wissensbasis/nulleinspeisung-hoymiles-hm-1500-mit-opendtu-python-steuerung/
-
-    # Change log
-    Full details: https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
+    Full change log & docs: https://github.com/AndreBott83/HA_Zero_PV_Grid_Feed_in
   domain: automation
   input:
     TriggerInterval:
       name: Interval trigger
-      description: Interval (seconds) between evaluations.
+      description: Interval (seconds) between periodic evaluations.
       default: 15
       selector:
         number:
@@ -62,7 +62,7 @@ blueprint:
           step: 1
     AllowedFeedIn:
       name: Allowed grid feed‑in (W)
-      description: PV power reduction starts only if export exceeds this value.
+      description: PV power reduction starts only if **export** exceeds this value.
       default: 0
       selector:
         number:
@@ -73,7 +73,7 @@ blueprint:
           step: 1
     ModeSelector:
       name: Control mode selector
-      description: "1 → smooth control, 2 → hard cut to zero feed‑in."
+      description: "1 → smooth control · 2 → hard cut to zero feed‑in."
       default: 1
       selector:
         number:
@@ -129,53 +129,63 @@ variables:
   BatteryPowerMetersvar: !input "BatteryPowerMeters"
   ctlr_mode: !input "ModeSelector"
   invert_grid: !input "InvertGrid"
+
+  # --- Combined sensor values ---
   pvgeneration: >
-    {% set pv = expand(PVPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
-    {{ pv }}
+    {{ expand(PVPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum }}
   grid_raw: >
-    {% set grid = expand(GridPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
+    {% set g = expand(GridPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
     {% if invert_grid %}
-      {% set grid = grid * -1 %}
+      {% set g = g * -1 %}
     {% endif %}
-    {{ grid }}
+    {{ g }}
   battery_raw: >
-    {% set bat = expand(BatteryPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum %}
-    {{ bat }}
+    {{ expand(BatteryPowerMetersvar) | map(attribute='state') | map('float', default=0) | sum }}
   gridsum: >
     {{ grid_raw + battery_raw }}
+
+  # --- State flags ---
+  is_importing: >
+    {{ gridsum | float(0) > 0 }}
+
+  # --- Feed‑in modifier (only for export) ---
   modifier: !input "AllowedFeedIn"
   modifier_setpoint: >
     {% if gridsum | float(0) < 0 %}
       {{ modifier }}
     {% else %}
-      100
+      0
     {% endif %}
+
   inverteronline: !input "InverterOnlineStatus"
+
+  # --- Regular set‑point calculations (used only for export) ---
   new_setpoint_mode1: >
-    {% set setpoint = gridsum | float(0) + modifier_setpoint | float(0) + states(currentlimit) | float(0) - 5 %}
-    {% if setpoint > upperlimit %}
-      {% set setpoint = upperlimit %}
-    {% elif setpoint < lowerlimit %}
-      {% set setpoint = lowerlimit %}
+    {% set sp = gridsum | float(0) + modifier_setpoint | float(0) + states(currentlimit) | float(0) - 5 %}
+    {% if sp > upperlimit %}
+      {% set sp = upperlimit %}
+    {% elif sp < lowerlimit %}
+      {% set sp = lowerlimit %}
     {% endif %}
-    {{ setpoint }}
+    {{ sp }}
   new_setpoint_mode2: >
-    {% set setpoint = gridsum | float(0) + modifier_setpoint | float(0) + pvgeneration | float(0) + 5 %}
-    {% if setpoint > upperlimit %}
-      {% set setpoint = upperlimit %}
-    {% elif setpoint < lowerlimit %}
-      {% set setpoint = lowerlimit %}
+    {% set sp = gridsum | float(0) + modifier_setpoint | float(0) + pvgeneration | float(0) + 5 %}
+    {% if sp > upperlimit %}
+      {% set sp = upperlimit %}
+    {% elif sp < lowerlimit %}
+      {% set sp = lowerlimit %}
     {% endif %}
-    {{ setpoint }}
+    {{ sp }}
   new_setpoint: >
     {% if ctlr_mode == 1 %}
       {{ new_setpoint_mode1 | round(0) }}
-    {% elif ctlr_mode == 2 %}
+    {% else %}
       {{ new_setpoint_mode2 | round(0) }}
-    {% endif %} 
+    {% endif %}
+
+  # --- Percentage output to inverter ---
   percent_setpoint: >
-    {# Drive to full power whenever net grid import is detected #}
-    {% if gridsum | float(0) > 0 %}
+    {% if is_importing %}
       100
     {% elif upperlimit | float(0) > 0 %}
       {{ (new_setpoint | float(0) / upperlimit | float(0)) * 100 | round(0) }}
@@ -186,6 +196,8 @@ variables:
 trigger:
   - platform: state
     entity_id: !input "GridPowerMeters"
+  - platform: time_pattern
+    seconds: "/{{ triggerinterval }}"
 
 condition:
   - condition: template
@@ -193,7 +205,7 @@ condition:
   - condition: template
     value_template: |
       {% set last = state_attr(this.entity_id, 'last_triggered') %}
-      {{ last is none or (last is not none and (now() - last) > timedelta(seconds=triggerinterval)) }}
+      {{ last is none or (now() - last) > timedelta(seconds=triggerinterval) }}
   - condition: template
     value_template: "{{ (percent_setpoint - states(currentlimit) | float(0)) | abs > 1 }}"
 
@@ -201,7 +213,12 @@ action:
   - service: logbook.log
     data_template:
       name: "PVSetpoint%:"
-      message: "Gridsum: {{ gridsum }} W (Grid: {{ grid_raw }} W + Battery: {{ battery_raw }} W) & PVGeneration: {{ pvgeneration }} W -> new_setpoint: {{ new_setpoint }} W ({{ percent_setpoint }} %)"
+      message: >
+        {% if is_importing %}
+          Import → 100 % (Grid {{ grid_raw }} W · Battery {{ battery_raw }} W = Net {{ gridsum }} W)
+        {% else %}
+          Export → {{ percent_setpoint }} % (Net {{ gridsum }} W, PV {{ pvgeneration }} W)
+        {% endif %}
   - service: number.set_value
     target:
       entity_id: !input "NonPersistantLimit"
