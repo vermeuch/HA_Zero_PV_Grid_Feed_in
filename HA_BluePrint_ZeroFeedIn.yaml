@@ -177,7 +177,7 @@ variables:
     {% if upperlimit | float(0) > 0 %}
       {{ (new_setpoint | float(0) / upperlimit | float(0)) * 100 | round(0) }}
     {% else %}
-      0
+      100
     {% endif %}
 
 trigger:
