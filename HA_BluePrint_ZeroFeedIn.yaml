@@ -2,23 +2,23 @@ blueprint:
   name: Control PV Limit to avoid exporting to the grid
   description: >
     # Zero Feed In Automation
-    **Version: 0.0.6**
+    **Version: 0.0.7**
 
     # Summary
     This automation reacts to changes in energy imported from or exported to the grid.
     It dynamically sets the photovoltaic (PV) inverter power limit so that no
-    (or only a user-defined minimum) power is fed back to the grid.
+    (or only a user‑defined minimum) power is fed back to the grid.
 
-    ## New in 0.0.6
-    * **BatteryPowerMeters** – New option to include the battery power (e.g. charge/discharge)
-      in the grid import/export calculation. Positive values add to export, negative values to import.
+    ## New in 0.0.7
+    * **Percentage output** – The value written to *NonPersistantLimit* is now a **percentage** of the inverter’s maximum AC power instead of watts.
+      It is calculated as `(new_setpoint / upperlimit) * 100` and rounded to the nearest whole percent.
 
     ## Required sensors / entities
 
-    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W. They will be summed.
-    * **BatteryPowerMeters** – Optional: Sensors measuring battery power (e.g. discharge/charge).
-    * **PVPowerMeters** – Sensors measuring PV generation in W. They will be summed.
-    * **NonPersistantLimit** – Number entity that stores the *non-persistent* power limit in W.
+    * **GridPowerMeters** – Sensors measuring grid import/export (e.g. L1, L2, L3) in W.
+    * **BatteryPowerMeters** – *Optional*: Sensors measuring battery charge/discharge in W.
+    * **PVPowerMeters** – Sensors measuring PV generation in W.
+    * **NonPersistantLimit** – *Number* entity that stores the **percentage** power limit (0‑100 %).
     * **InverterOnlineStatus** – Binary/Text entity that is *"On"* or numeric *4* when the inverter is reachable.
 
     Kudos for the simple algorithm and idea go to:
@@ -39,8 +39,8 @@ blueprint:
           unit_of_measurement: "s"
           step: 5
     MaxInverterPower:
-      name: Inverter upper limit
-      description: Maximum inverter power (W).
+      name: Inverter upper limit (W)
+      description: Maximum AC power the inverter can deliver.
       default: 1600
       selector:
         number:
@@ -50,8 +50,8 @@ blueprint:
           mode: box
           step: 1
     MinInverterPower:
-      name: Inverter lower limit
-      description: Minimum inverter power (W).
+      name: Inverter lower limit (W)
+      description: Minimum AC power the inverter should deliver.
       default: 600
       selector:
         number:
@@ -61,7 +61,7 @@ blueprint:
           mode: box
           step: 1
     AllowedFeedIn:
-      name: Allowed grid feed-in (W)
+      name: Allowed grid feed‑in (W)
       description: PV power reduction starts only if export exceeds this value.
       default: 0
       selector:
@@ -73,7 +73,7 @@ blueprint:
           step: 1
     ModeSelector:
       name: Control mode selector
-      description: "1 → smooth control, 2 → hard cut to zero feed-in"
+      description: "1 → smooth control, 2 → hard cut to zero feed‑in."
       default: 1
       selector:
         number:
@@ -82,7 +82,7 @@ blueprint:
           step: 1
     InvertGrid:
       name: Invert GridPowerMeters?
-      description: "Enable if your GridPowerMeters report export as positive."
+      description: Enable if your GridPowerMeters report export as positive.
       default: false
       selector:
         boolean:
@@ -109,8 +109,8 @@ blueprint:
           device_class: power
           multiple: true
     NonPersistantLimit:
-      name: Non-persistent PV limit entity (W)
-      description: Number entity to write the calculated PV limit.
+      name: Non‑persistent PV limit entity (%)
+      description: Number entity to write the calculated PV limit percentage (0‑100).
       selector:
         entity:
     InverterOnlineStatus:
@@ -173,6 +173,12 @@ variables:
     {% elif ctlr_mode == 2 %}
       {{ new_setpoint_mode2 | round(0) }}
     {% endif %}
+  percent_setpoint: >
+    {% if upperlimit | float(0) > 0 %}
+      {{ (new_setpoint | float(0) / upperlimit | float(0)) * 100 | round(0) }}
+    {% else %}
+      0
+    {% endif %}
 
 trigger:
   - platform: state
@@ -186,17 +192,18 @@ condition:
       {% set last = state_attr(this.entity_id, 'last_triggered') %}
       {{ last is none or (last is not none and (now() - last) > timedelta(seconds=triggerinterval)) }}
   - condition: template
-    value_template: "{{ (new_setpoint - states(currentlimit) | float(0)) | abs > 5 }}"
+    value_template: "{{ (percent_setpoint - states(currentlimit) | float(0)) | abs > 1 }}"
 
 action:
   - service: logbook.log
     data_template:
-      name: "PVSetpoint:"
-      message: "Gridsum: {{ gridsum }} W (Grid: {{ grid_raw }} W + Battery: {{ battery_raw }} W) & PVGeneration: {{ pvgeneration }} W -> new_setpoint: {{ new_setpoint }} W"
+      name: "PVSetpoint%:"
+      message: "Gridsum: {{ gridsum }} W (Grid: {{ grid_raw }} W + Battery: {{ battery_raw }} W) & PVGeneration: {{ pvgeneration }} W -> new_setpoint: {{ new_setpoint }} W ({{ percent_setpoint }} %)"
   - service: number.set_value
     target:
       entity_id: !input "NonPersistantLimit"
     data:
-      value: "{{ new_setpoint }}"
+      value: "{{ percent_setpoint }}"
 
 mode: single
+
